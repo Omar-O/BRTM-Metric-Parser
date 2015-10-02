@@ -1,3 +1,5 @@
+var prettyjson = require('prettyjson');
+
 var brtmParser = {
 
 	addObjProperty : function (page, key, obj) {
@@ -18,45 +20,79 @@ var brtmParser = {
         
         // Number of Metrics Counts
         var count = req.body.bCount;
-        //console.log("Num of Metric Count = " + count);
+        console.log("parseMetrics req.body.bCount = " + count);
 
-        // Posted Data with all the Metrics, separated by ';'
-        var rawMetrics = [];
-        rawMetrics = req.body.b0.split(';');
-        //console.log("rawMetrics[] = " + rawMetrics.toString());
-
-        // First line
-        // $bs=-1,bt=-1,btc=-1,url=localhost/9090|/jtixchange_web/shop/index.shtml
-        var firstLine = rawMetrics[0].toString().split(',');
-
-        // Make sure the format is what we expect, else return some sort of error
-        var url = rawMetrics[1].toString().split(':');
-        if ( !firstLine|| !url[0] || !url[1] )
-        {
-            //Log error or something
-            res.end();
-            //res.status(500).end('Unrecognized Metric Format');
-            res.status(403).send('Unrecognized Metric Format');
-
-            return;
+        if ( !count ) {
+            var values = req.body.split('=');
+            if (values[0] == 'UB') {  // postData = "UB=true"; // Unsupported Browser
+                
+                // Nothing to do....Broswer not supported
+                // Maybe we log/sned this as well....coudl be good info to know along with user-agent
+                res.end();
+                return;
+            }
         }
 
-        var newPage = {"page": "uninitialized"};
+        //console.log("parseMetrics req.body.b0 = " + req.body.b0);
 
-        newPage = brtmParser.parse(url, rawMetrics, req.headers);
+        // Posted Data looks like this:
+        // {{ bCount=1&b0=g=-255,-255;duration=382;p=Chrome;pv=45;CorBrowsGUID=24510868C0A8001A5F8A138A7CDCF7B4;
+        //   artTime=1443718301791$bs=-1,bt=-1,btc=-1,url=localhost/9090|/jtixchange_web/shop/index.shtml;
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Browser Render Time (ms)=(338,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Connection Establishment Time (ms)=(1,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average DNS Lookup Time (ms)=(0,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average DOM Construction Time (ms)=(351,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Page Load Complete Time (ms)=(382,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Previous Page Unload Time (ms)=(36,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Round Trip Time (ms)=(22,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Time to First Byte (ms)=(28,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Average Time to Last Byte (ms)=(29,0);
+        //   localhost/9090|/jtixchange_web/shop/index.shtml:Responses Per Interval=(1,1) }}
+        
+
+        // Strategy: I will slpit the above line between the token '$bs' 
+        // I have already implemented how to handle the second half of this string,
+        // just need to handle the first half now
+        var index = req.body.b0.indexOf('$bs');
+        var firstHalf = req.body.b0.substring(0, index);
+        var secondHalf = req.body.b0.substring(index, req.body.b0.length);
+
+        //console.log("Fist Half = " + firstHalf);
+        //console.log("Second Half = " + secondHalf);
+
+        var TTOption = [];
+        if ( index > 1 ){
+            TTOption = firstHalf.split(';');
+        }
+
+        var rawMetrics = [];
+        rawMetrics = secondHalf.split(';');
+        
+        // Debuggin Post data
+        // for (var i = 0; i < rawMetrics.length; i++) {
+        //     console.log("rawMetrics["+ i + "] = " + rawMetrics[i].toString());
+        // };
+
+        var newPage = {};
+
+        newPage = brtmParser.parse(TTOption, rawMetrics, req.headers);
 
         brtmParser.save(newPage);
-
-        req.parsedPage = "BRTM Metrics have been Parsed!!!";
  
-        res.end();
+        //res.end();
         res.status(200).end();
         
     },
 
-    parse: function (url, rawMetrics, headers, callback) {
+    parse: function (TTOption, rawMetrics, headers) {
 
         var page = {"timestamp": new Date()};
+
+        for (var i = 0; i < TTOption.length; i++) {
+            console.log('TTOption[' + i + '] = ' + TTOption[i]);
+            var keys = TTOption[i].split('=');
+            brtmParser.addObjProperty(page, keys[0], keys[1]);
+        };
 
         var firstLine = rawMetrics[0].toString().split(',');
         firstLine.forEach(function(element){
@@ -70,10 +106,14 @@ var brtmParser = {
             }
             else
             {
+                if ( item[0].indexOf('$') > -1 ) {
+                    item[0] = item[0].substring(1, item[0].length);
+                }
                 brtmParser.addObjProperty(page, item[0], item[1]);
             }
         }); 
 
+        var url = rawMetrics[1].toString().split(':');
         var metricArray =[];
         for (var i = 1; i < rawMetrics.length; i++) {
             var line = rawMetrics[i].toString().trim();
@@ -116,7 +156,7 @@ var brtmParser = {
         // Store header info
 
         var header = {
-            "user-agent": headers['user-agent'],
+            "user_agent": headers['user-agent'],
             "referer": headers.referer
         }
 
@@ -132,12 +172,14 @@ var brtmParser = {
 
     save: function (page, callback) {
 
-        //console.log("Saving page:");
-        console.log(JSON.stringify(page)); 
+    	var options = {
+		  noColor: true
+		};
+		console.log("\n---------------------------------------------------------------------");
+        console.log(prettyjson.render(page, options));
+        console.log("\n");
+        //console.log(JSON.stringify(page)); 
 
-        // async.setImmediate(function () {
-        //   callback();
-        // });
     },
 
 
